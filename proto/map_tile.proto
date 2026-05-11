@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package mapserving.v1;
+
+// WGS84 geographic coordinate
+message Point {
+  double lat = 1;
+  double lon = 2;
+}
+
+// S2 cell identifier
+message S2CellId {
+  uint64 id    = 1;
+  int32  level = 2;
+}
+
+// Ordered sequence of points forming a line
+message LineString {
+  repeated Point points = 1;
+}
+
+// OSM highway classification (Lanelet2-inspired road type hierarchy)
+enum HighwayClass {
+  HIGHWAY_UNKNOWN       = 0;
+  HIGHWAY_MOTORWAY      = 1;
+  HIGHWAY_TRUNK         = 2;
+  HIGHWAY_PRIMARY       = 3;
+  HIGHWAY_SECONDARY     = 4;
+  HIGHWAY_TERTIARY      = 5;
+  HIGHWAY_RESIDENTIAL   = 6;
+  HIGHWAY_SERVICE       = 7;
+  HIGHWAY_UNCLASSIFIED  = 8;
+  HIGHWAY_MOTORWAY_LINK = 9;
+  HIGHWAY_TRUNK_LINK    = 10;
+  HIGHWAY_PRIMARY_LINK  = 11;
+  HIGHWAY_SECONDARY_LINK = 12;
+  HIGHWAY_TERTIARY_LINK  = 13;
+}
+
+// A directed road segment derived from an OSM way.
+// Inspired by Lanelet2's Lanelet primitive: each segment carries its
+// centerline geometry plus lane and regulatory metadata.
+message RoadSegment {
+  int64       osm_way_id          = 1;
+  LineString  centerline          = 2;
+  HighwayClass highway_class      = 3;
+
+  // Lane counts sourced from lanes / lanes:forward / lanes:backward OSM tags
+  int32  lane_count               = 4;
+  int32  lane_count_forward       = 5;
+  int32  lane_count_backward      = 6;
+
+  // Pipe-delimited turn lane tags, e.g. "left|through|right"
+  string turn_lanes_forward       = 7;
+  string turn_lanes_backward      = 8;
+
+  string road_name                = 9;
+  bool   oneway                   = 10;
+  double max_speed_kmh            = 11;
+
+  // OSM node IDs at the start and end of this segment (used to link into routing graph)
+  int64  start_node_id            = 12;
+  int64  end_node_id              = 13;
+}
+
+// A node in the routing graph — an OSM node that is either a road
+// intersection (referenced by 2+ highway ways) or an endpoint.
+message RoutingNode {
+  int64  osm_node_id    = 1;
+  Point  location       = 2;
+  bool   is_intersection = 3;
+}
+
+// A directed edge in the routing graph connecting two routing nodes.
+// bidirectional=true means travel is permitted in both directions.
+message RoutingEdge {
+  int64  from_node_id   = 1;
+  int64  to_node_id     = 2;
+  int64  osm_way_id     = 3;
+  double length_meters  = 4;
+  bool   bidirectional  = 5;
+}
+
+// Sparse routing graph for a single tile.
+// Contains only the nodes and edges whose geometry falls within this tile.
+message RoutingGraph {
+  repeated RoutingNode nodes = 1;
+  repeated RoutingEdge edges = 2;
+}
+
+// Top-level tile message — one file per S2 level-14 cell.
+message MapTile {
+  S2CellId            tile_id        = 1;
+  repeated RoadSegment road_segments  = 2;
+  RoutingGraph         routing_graph  = 3;
+  Point                bbox_min       = 4;
+  Point                bbox_max       = 5;
+}

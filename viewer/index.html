@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Seattle Map Tiles</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: sans-serif; background: #1a1a2e; color: #eee; }
+
+    #map { width: 100vw; height: 100vh; }
+
+    #legend {
+      position: absolute;
+      bottom: 24px;
+      right: 12px;
+      z-index: 1000;
+      background: rgba(20, 20, 40, 0.88);
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      line-height: 1.8;
+      min-width: 180px;
+    }
+    #legend h3 { font-size: 14px; margin-bottom: 6px; color: #adf; }
+    .legend-row { display: flex; align-items: center; gap: 8px; }
+    .swatch { width: 28px; height: 4px; border-radius: 2px; flex-shrink: 0; }
+    .swatch.dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    #stats {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(20, 20, 40, 0.88);
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 6px 16px;
+      font-size: 13px;
+      text-align: center;
+      color: #adf;
+      white-space: nowrap;
+    }
+
+    #loading {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 2000;
+      background: rgba(20,20,40,0.95);
+      border: 1px solid #555;
+      border-radius: 10px;
+      padding: 24px 36px;
+      font-size: 16px;
+      color: #adf;
+    }
+
+    /* ── Simulation panel ── */
+    #sim-panel {
+      position: absolute;
+      bottom: 24px;
+      left: 12px;
+      z-index: 1000;
+      background: rgba(20, 20, 40, 0.88);
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 13px;
+      min-width: 200px;
+    }
+    #sim-panel h3 { font-size: 14px; margin-bottom: 10px; color: #adf; }
+
+    .sim-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .sim-row label { color: #bbb; white-space: nowrap; }
+    .sim-row input[type=range] {
+      flex: 1;
+      accent-color: #4a9eff;
+      cursor: pointer;
+    }
+    .sim-val { color: #fff; font-weight: bold; min-width: 32px; text-align: right; }
+
+    #sim-btn {
+      width: 100%;
+      margin-top: 4px;
+      padding: 7px 0;
+      border: none;
+      border-radius: 6px;
+      background: #2a6fdb;
+      color: #fff;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      transition: background 0.15s;
+    }
+    #sim-btn:hover:not(:disabled) { background: #3a80ee; }
+    #sim-btn:disabled { background: #333; color: #666; cursor: default; }
+    #sim-btn.running { background: #8b2020; }
+    #sim-btn.running:hover { background: #a33; }
+
+    #sim-status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #8bd;
+      min-height: 16px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading tile data…</div>
+  <div id="map"></div>
+  <div id="stats"></div>
+
+  <div id="legend">
+    <h3>Legend</h3>
+    <div class="legend-row"><div class="swatch" style="background:#4a9eff;opacity:0.5;height:2px;"></div> S2 tile boundary</div>
+    <div class="legend-row"><div class="swatch" style="background:#f0c040;"></div> Road centerline</div>
+    <div class="legend-row"><div class="swatch" style="background:#ff6b6b;height:2px;"></div> Routing edge</div>
+    <div class="legend-row"><div class="swatch dot" style="background:#00e5a0;"></div> Routing node</div>
+    <div class="legend-row"><div class="swatch dot" style="background:#ffd93d;"></div> Vehicle</div>
+  </div>
+
+  <div id="sim-panel">
+    <h3>Fleet Simulation</h3>
+    <div class="sim-row">
+      <label>Vehicles</label>
+      <input type="range" id="sim-count" min="5" max="100" value="20" step="5" />
+      <span class="sim-val" id="sim-count-val">20</span>
+    </div>
+    <div class="sim-row">
+      <label>Speed</label>
+      <input type="range" id="sim-speed" min="1" max="8" value="3" step="1" />
+      <span class="sim-val" id="sim-speed-val">3×</span>
+    </div>
+    <button id="sim-btn" disabled>▶ Run Simulation</button>
+    <div id="sim-status">Loading graph…</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // ── Map setup ─────────────────────────────────────────────────────────────
+    const map = L.map('map', {
+      center: [47.614, -122.332],
+      zoom: 13,
+      preferCanvas: true,
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      maxZoom: 19,
+    }).addTo(map);
+
+    const layerTileBounds = L.layerGroup().addTo(map);
+    const layerRoads      = L.layerGroup().addTo(map);
+    const layerRoutEdges  = L.layerGroup().addTo(map);
+    const layerRoutNodes  = L.layerGroup().addTo(map);
+    const layerVehicles   = L.layerGroup().addTo(map);
+
+    L.control.layers(null, {
+      "S2 tile boundaries": layerTileBounds,
+      "Road centerlines":   layerRoads,
+      "Routing edges":      layerRoutEdges,
+      "Routing nodes":      layerRoutNodes,
+      "Vehicles":           layerVehicles,
+    }, { collapsed: false, position: 'topright' }).addTo(map);
+
+    // ── Simulation globals ────────────────────────────────────────────────────
+    const adjacency = new Map();   // "lat,lon" -> { pos, neighbors[] }
+    let adjacencyKeys = [];        // keys with outgoing edges (for spawning)
+    let simRunning    = false;
+    let simVehicles   = [];
+    let simFrameId    = null;
+    let simLastTime   = null;
+    let simTick       = 0;
+
+    const COLORS = [
+      '#ffd93d','#ff6b6b','#6bcb77','#4d96ff','#ff922b',
+      '#cc5de8','#20c997','#f06595','#74c0fc','#a9e34b',
+    ];
+
+    function buildAdjacency(edges) {
+      for (const [a, b] of edges) {
+        const ka = a[0] + ',' + a[1];
+        const kb = b[0] + ',' + b[1];
+        if (!adjacency.has(ka)) adjacency.set(ka, { pos: a, neighbors: [] });
+        if (!adjacency.has(kb)) adjacency.set(kb, { pos: b, neighbors: [] });
+        adjacency.get(ka).neighbors.push(b);
+      }
+      adjacencyKeys = [];
+      for (const [k, v] of adjacency) {
+        if (v.neighbors.length > 0) adjacencyKeys.push(k);
+      }
+    }
+
+    // ── Vehicle class ─────────────────────────────────────────────────────────
+    class Vehicle {
+      constructor(id) {
+        this.id    = id;
+        this.color = COLORS[id % COLORS.length];
+        // Speed in lat/lon degrees per ms — varies per vehicle for realism
+        this.baseSpeed = 0.0000015 + Math.random() * 0.0000010;
+        this._spawn();
+        this.marker = L.circleMarker(this.fromPos, {
+          radius: 5,
+          color:  'rgba(0,0,0,0.4)',
+          fillColor: this.color,
+          fillOpacity: 0.95,
+          weight: 1,
+          interactive: false,
+        }).addTo(layerVehicles);
+      }
+
+      _randomNode() {
+        return adjacencyKeys[Math.floor(Math.random() * adjacencyKeys.length)];
+      }
+
+      _spawn() {
+        const key = this._randomNode();
+        const node = adjacency.get(key);
+        this.fromPos    = node.pos;
+        this.currentKey = key;
+        this.t          = 0;
+        this._pickNextEdge();
+        this.t = Math.random(); // stagger start positions
+      }
+
+      _pickNextEdge() {
+        const node = adjacency.get(this.currentKey);
+        if (!node || node.neighbors.length === 0) {
+          // Dead end — teleport to a random node with outgoing edges
+          const key = this._randomNode();
+          const n   = adjacency.get(key);
+          this.fromPos    = n.pos;
+          this.currentKey = key;
+          this._pickNextEdge();
+          return;
+        }
+        this.toPos = node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
+        this.toKey = this.toPos[0] + ',' + this.toPos[1];
+        this.t     = 0;
+      }
+
+      update(dt, speedMult) {
+        const dlat = this.toPos[0] - this.fromPos[0];
+        const dlon = this.toPos[1] - this.fromPos[1];
+        const len  = Math.sqrt(dlat * dlat + dlon * dlon);
+        if (len < 1e-9) { this._pickNextEdge(); return; }
+
+        this.t += (this.baseSpeed * speedMult * dt) / len;
+
+        const frac = Math.min(this.t, 1);
+        this.marker.setLatLng([
+          this.fromPos[0] + dlat * frac,
+          this.fromPos[1] + dlon * frac,
+        ]);
+
+        if (this.t >= 1) {
+          this.fromPos    = this.toPos;
+          this.currentKey = this.toKey;
+          this._pickNextEdge();
+        }
+      }
+
+      remove() { layerVehicles.removeLayer(this.marker); }
+    }
+
+    // ── Simulation control ────────────────────────────────────────────────────
+    function spawnVehicles(count) {
+      const existing = simVehicles.length;
+      if (count > existing) {
+        for (let i = existing; i < count; i++) simVehicles.push(new Vehicle(i));
+      } else {
+        while (simVehicles.length > count) simVehicles.pop().remove();
+      }
+    }
+
+    function simLoop(now) {
+      if (!simRunning) return;
+      const dt       = simLastTime ? Math.min(now - simLastTime, 100) : 16;
+      simLastTime    = now;
+      const speedMult = parseInt(document.getElementById('sim-speed').value, 10);
+
+      for (const v of simVehicles) v.update(dt, speedMult);
+
+      if (++simTick % 30 === 0) {
+        document.getElementById('sim-status').textContent =
+          `${simVehicles.length} vehicles active`;
+      }
+
+      simFrameId = requestAnimationFrame(simLoop);
+    }
+
+    function startSim() {
+      const count = parseInt(document.getElementById('sim-count').value, 10);
+      spawnVehicles(count);
+      simRunning  = true;
+      simLastTime = null;
+      simTick     = 0;
+      simFrameId  = requestAnimationFrame(simLoop);
+      const btn   = document.getElementById('sim-btn');
+      btn.textContent = '■ Stop Simulation';
+      btn.classList.add('running');
+    }
+
+    function stopSim() {
+      simRunning = false;
+      cancelAnimationFrame(simFrameId);
+      simVehicles.forEach(v => v.remove());
+      simVehicles = [];
+      const btn = document.getElementById('sim-btn');
+      btn.textContent = '▶ Run Simulation';
+      btn.classList.remove('running');
+      document.getElementById('sim-status').textContent = '';
+    }
+
+    document.getElementById('sim-btn').addEventListener('click', () => {
+      simRunning ? stopSim() : startSim();
+    });
+
+    // Live-update labels and adjust running count
+    document.getElementById('sim-count').addEventListener('input', function () {
+      document.getElementById('sim-count-val').textContent = this.value;
+      if (simRunning) spawnVehicles(parseInt(this.value, 10));
+    });
+    document.getElementById('sim-speed').addEventListener('input', function () {
+      document.getElementById('sim-speed-val').textContent = this.value + '×';
+    });
+
+    // ── Load data ─────────────────────────────────────────────────────────────
+    fetch('viewer_data.json')
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        document.getElementById('loading').remove();
+
+        for (const ring of data.tile_boundaries) {
+          L.polygon(ring, {
+            color: '#4a9eff', weight: 1, opacity: 0.5,
+            fillOpacity: 0.03, interactive: false,
+          }).addTo(layerTileBounds);
+        }
+
+        for (const coords of data.road_lines) {
+          L.polyline(coords, {
+            color: '#f0c040', weight: 1.5, opacity: 0.8, interactive: false,
+          }).addTo(layerRoads);
+        }
+
+        for (const [a, b] of data.routing_edges) {
+          L.polyline([a, b], {
+            color: '#ff6b6b', weight: 1, opacity: 0.6, interactive: false,
+          }).addTo(layerRoutEdges);
+        }
+
+        const nodeStyle = {
+          radius: 3, color: '#00e5a0', fillColor: '#00e5a0',
+          fillOpacity: 0.8, weight: 0, interactive: false,
+        };
+        for (const [lat, lon] of data.routing_nodes) {
+          L.circleMarker([lat, lon], nodeStyle).addTo(layerRoutNodes);
+        }
+
+        document.getElementById('stats').textContent =
+          `${data.tile_boundaries.length} S2 tiles · ` +
+          `${data.road_lines.length} road segments · ` +
+          `${data.routing_nodes.length} routing nodes · ` +
+          `${data.routing_edges.length} routing edges`;
+
+        // Build graph and enable simulation
+        buildAdjacency(data.routing_edges);
+        const btn = document.getElementById('sim-btn');
+        btn.disabled = false;
+        document.getElementById('sim-status').textContent =
+          `${adjacencyKeys.length.toLocaleString()} nodes in graph`;
+      })
+      .catch(err => {
+        document.getElementById('loading').textContent =
+          `Failed to load viewer_data.json: ${err.message}. ` +
+          `Serve this directory with: python -m http.server 8000`;
+      });
+  </script>
+</body>
+</html>

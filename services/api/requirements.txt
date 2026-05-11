@@ -1,0 +1,6 @@
+fastapi>=0.104
+uvicorn[standard]>=0.24
+aioboto3>=12.3
+s2sphere>=0.2.5
+redis[asyncio]>=5.0
+prometheus-fastapi-instrumentator>=6.1

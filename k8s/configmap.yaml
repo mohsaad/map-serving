@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: map-serving-config
+data:
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  # Internal cluster endpoint — used by services for DDB/S3 operations
+  AWS_ENDPOINT_URL: http://localstack:4566
+  # External endpoint used for presigned URL generation (port-forwarded to localhost)
+  S3_PRESIGN_ENDPOINT: http://localhost:4566
+  DDB_TABLE_NAME: map_tiles
+  S3_BUCKET: map-tiles
+  # Comma-separated Redis hosts (one per StatefulSet pod via headless service DNS)
+  REDIS_HOSTS: "redis-0.redis-headless:6379,redis-1.redis-headless:6379"
+  REDIS_CACHE_TTL: "3600"

@@ -1,0 +1,8 @@
+osmium>=4.3
+s2sphere>=0.2.5
+protobuf>=4.0
+grpcio-tools>=1.50
+shapely>=2.0
+requests>=2.28
+tqdm>=4.64
+httpx>=0.25
