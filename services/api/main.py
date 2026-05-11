@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import aioboto3
 import s2sphere
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter
 from prometheus_fastapi_instrumentator import Instrumentator
 from redis.asyncio import Redis
@@ -60,6 +61,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Map Serving API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 # Auto-instrument all routes: exposes http_request_duration_seconds histogram
 # (count, sum, buckets) with method/handler/status_code labels on GET /metrics
