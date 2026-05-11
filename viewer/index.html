@@ -175,7 +175,7 @@
     </div>
     <div class="sim-row">
       <label>Speed</label>
-      <input type="range" id="sim-speed" min="1" max="8" value="3" step="1" />
+      <input type="range" id="sim-speed" min="1" max="20" value="3" step="1" />
       <span class="sim-val" id="sim-speed-val">3×</span>
     </div>
     <button id="sim-btn" disabled>▶ Run Simulation</button>
@@ -247,9 +247,45 @@
         if (!adjacency.has(kb)) adjacency.set(kb, { pos: b, neighbors: [] });
         adjacency.get(ka).neighbors.push(b);
       }
+
+      // Build undirected neighbor sets for component analysis
+      const undirected = new Map();
+      for (const [k, v] of adjacency) {
+        if (!undirected.has(k)) undirected.set(k, new Set());
+        for (const nb of v.neighbors) {
+          const nk = nb[0] + ',' + nb[1];
+          undirected.get(k).add(nk);
+          if (!undirected.has(nk)) undirected.set(nk, new Set());
+          undirected.get(nk).add(k);
+        }
+      }
+
+      // BFS to find connected components; keep nodes in components >= MIN_SIZE
+      const MIN_SIZE = 200;
+      const visited  = new Set();
+      const keep     = new Set();
+
+      for (const start of undirected.keys()) {
+        if (visited.has(start)) continue;
+        const component = [];
+        const queue = [start];
+        visited.add(start);
+        while (queue.length) {
+          const k = queue.shift();
+          component.push(k);
+          for (const nb of undirected.get(k)) {
+            if (!visited.has(nb)) { visited.add(nb); queue.push(nb); }
+          }
+        }
+        if (component.length >= MIN_SIZE) {
+          for (const k of component) keep.add(k);
+        }
+      }
+
+      // Only spawn on nodes that are in large components and have outgoing edges
       adjacencyKeys = [];
       for (const [k, v] of adjacency) {
-        if (v.neighbors.length > 0) adjacencyKeys.push(k);
+        if (v.neighbors.length > 0 && keep.has(k)) adjacencyKeys.push(k);
       }
     }
 
@@ -258,7 +294,7 @@
       constructor(id) {
         this.id        = id;
         this.color     = COLORS[id % COLORS.length];
-        this.baseSpeed = 0.0000015 + Math.random() * 0.0000010;
+        this.baseSpeed = 0.000008 + Math.random() * 0.000004;
         this._spawn();
         this.marker = L.circleMarker(this.fromPos, {
           radius: 5,
@@ -297,7 +333,12 @@
           this._pickNextEdge();
           return;
         }
-        this.toPos = node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
+        // Exclude the node we just came from to prevent A↔B bouncing.
+        // Fall back to all neighbors only if every edge leads back.
+        const prevKey   = this.fromPos ? this.fromPos[0] + ',' + this.fromPos[1] : null;
+        const forward   = node.neighbors.filter(n => (n[0] + ',' + n[1]) !== prevKey);
+        const pool      = forward.length > 0 ? forward : node.neighbors;
+        this.toPos = pool[Math.floor(Math.random() * pool.length)];
         this.toKey = this.toPos[0] + ',' + this.toPos[1];
         this.t     = 0;
 

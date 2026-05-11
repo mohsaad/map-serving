@@ -25,9 +25,9 @@ import httpx
 # Seattle bounding box (WGS84)
 _BB = dict(min_lat=47.4953, max_lat=47.7341, min_lon=-122.4596, max_lon=-122.2244)
 
-# ~50 m step per iteration in lat/lon degrees at Seattle's latitude
-_STEP_LAT = 0.00045   # ~50 m
-_STEP_LON = 0.00065   # ~50 m
+# ~500 m step per iteration in lat/lon degrees at Seattle's latitude
+_STEP_LAT = 0.0045   # ~500 m
+_STEP_LON = 0.0065   # ~500 m
 
 
 # ---------------------------------------------------------------------------
