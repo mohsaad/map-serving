@@ -114,6 +114,37 @@
       min-height: 16px;
       text-align: center;
     }
+
+    #api-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    #api-row label { color: #bbb; font-size: 12px; white-space: nowrap; }
+    #api-url {
+      flex: 1;
+      background: #111827;
+      border: 1px solid #555;
+      border-radius: 4px;
+      color: #eee;
+      font-size: 11px;
+      padding: 3px 6px;
+    }
+    #api-indicator {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #555; flex-shrink: 0;
+    }
+    #api-indicator.ok  { background: #00e5a0; }
+    #api-indicator.err { background: #ff6b6b; }
+
+    #sim-api-stats {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #aaa;
+      line-height: 1.7;
+    }
+    #sim-api-stats span { font-weight: bold; color: #eee; }
   </style>
 </head>
 <body>
@@ -132,6 +163,11 @@
 
   <div id="sim-panel">
     <h3>Fleet Simulation</h3>
+    <div id="api-row">
+      <label>API</label>
+      <input id="api-url" type="text" value="http://localhost:30000" spellcheck="false" />
+      <div id="api-indicator" title="API status"></div>
+    </div>
     <div class="sim-row">
       <label>Vehicles</label>
       <input type="range" id="sim-count" min="5" max="100" value="20" step="5" />
@@ -144,6 +180,7 @@
     </div>
     <button id="sim-btn" disabled>▶ Run Simulation</button>
     <div id="sim-status">Loading graph…</div>
+    <div id="sim-api-stats"></div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -175,18 +212,32 @@
     }, { collapsed: false, position: 'topright' }).addTo(map);
 
     // ── Simulation globals ────────────────────────────────────────────────────
-    const adjacency = new Map();   // "lat,lon" -> { pos, neighbors[] }
-    let adjacencyKeys = [];        // keys with outgoing edges (for spawning)
+    const adjacency = new Map();
+    let adjacencyKeys = [];
     let simRunning    = false;
     let simVehicles   = [];
     let simFrameId    = null;
     let simLastTime   = null;
     let simTick       = 0;
 
+    // API stats
+    let apiTotalReqs  = 0;
+    let apiHits       = 0;
+    let apiErrors     = 0;
+    let apiLatSum     = 0;
+
     const COLORS = [
       '#ffd93d','#ff6b6b','#6bcb77','#4d96ff','#ff922b',
       '#cc5de8','#20c997','#f06595','#74c0fc','#a9e34b',
     ];
+    // Colors shown after an API response: green = hit, orange = miss, red = error
+    const COLOR_HIT   = '#00e5a0';
+    const COLOR_MISS  = '#ff922b';
+    const COLOR_ERR   = '#ff4444';
+
+    function apiBase() {
+      return document.getElementById('api-url').value.replace(/\/$/, '');
+    }
 
     function buildAdjacency(edges) {
       for (const [a, b] of edges) {
@@ -205,9 +256,8 @@
     // ── Vehicle class ─────────────────────────────────────────────────────────
     class Vehicle {
       constructor(id) {
-        this.id    = id;
-        this.color = COLORS[id % COLORS.length];
-        // Speed in lat/lon degrees per ms — varies per vehicle for realism
+        this.id        = id;
+        this.color     = COLORS[id % COLORS.length];
         this.baseSpeed = 0.0000015 + Math.random() * 0.0000010;
         this._spawn();
         this.marker = L.circleMarker(this.fromPos, {
@@ -218,6 +268,9 @@
           weight: 1,
           interactive: false,
         }).addTo(layerVehicles);
+        // Track which S2 cell we last queried so we only call the API on cell change
+        this.lastQueriedKey = null;
+        this.fetching = false;
       }
 
       _randomNode() {
@@ -225,19 +278,18 @@
       }
 
       _spawn() {
-        const key = this._randomNode();
+        const key  = this._randomNode();
         const node = adjacency.get(key);
         this.fromPos    = node.pos;
         this.currentKey = key;
         this.t          = 0;
         this._pickNextEdge();
-        this.t = Math.random(); // stagger start positions
+        this.t = Math.random();
       }
 
       _pickNextEdge() {
         const node = adjacency.get(this.currentKey);
         if (!node || node.neighbors.length === 0) {
-          // Dead end — teleport to a random node with outgoing edges
           const key = this._randomNode();
           const n   = adjacency.get(key);
           this.fromPos    = n.pos;
@@ -248,6 +300,44 @@
         this.toPos = node.neighbors[Math.floor(Math.random() * node.neighbors.length)];
         this.toKey = this.toPos[0] + ',' + this.toPos[1];
         this.t     = 0;
+
+        // Fire API call when entering a new node
+        if (this.currentKey !== this.lastQueriedKey && !this.fetching) {
+          this.lastQueriedKey = this.currentKey;
+          this._queryApi(this.fromPos[0], this.fromPos[1]);
+        }
+      }
+
+      _queryApi(lat, lon) {
+        this.fetching = true;
+        const t0  = performance.now();
+        const url = `${apiBase()}/tile_id?lat=${lat}&lon=${lon}`;
+        fetch(url, { signal: AbortSignal.timeout(5000) })
+          .then(r => r.json())
+          .then(body => {
+            const ms = performance.now() - t0;
+            apiTotalReqs++;
+            apiLatSum += ms;
+            const isHit = body.cache === 'hit';
+            if (isHit) apiHits++;
+            // Flash the vehicle: hit=green, miss=orange, then restore original color
+            this._flash(isHit ? COLOR_HIT : COLOR_MISS);
+            document.getElementById('api-indicator').className = 'ok';
+          })
+          .catch(() => {
+            apiTotalReqs++;
+            apiErrors++;
+            this._flash(COLOR_ERR);
+            document.getElementById('api-indicator').className = 'err';
+          })
+          .finally(() => { this.fetching = false; });
+      }
+
+      _flash(color) {
+        this.marker.setStyle({ fillColor: color });
+        setTimeout(() => {
+          if (this.marker) this.marker.setStyle({ fillColor: this.color });
+        }, 600);
       }
 
       update(dt, speedMult) {
@@ -284,10 +374,24 @@
       }
     }
 
+    function updateApiStats() {
+      const hitPct  = apiTotalReqs > 0
+        ? ((apiHits / (apiTotalReqs - apiErrors)) * 100).toFixed(1)
+        : '—';
+      const avgLat  = apiTotalReqs > 0
+        ? (apiLatSum / (apiTotalReqs - apiErrors)).toFixed(0)
+        : '—';
+      document.getElementById('sim-api-stats').innerHTML =
+        `Requests: <span>${apiTotalReqs}</span> &nbsp;` +
+        `Hits: <span>${hitPct}%</span> &nbsp;` +
+        `Avg: <span>${avgLat}ms</span>` +
+        (apiErrors ? ` &nbsp;Errors: <span style="color:#f66">${apiErrors}</span>` : '');
+    }
+
     function simLoop(now) {
       if (!simRunning) return;
-      const dt       = simLastTime ? Math.min(now - simLastTime, 100) : 16;
-      simLastTime    = now;
+      const dt        = simLastTime ? Math.min(now - simLastTime, 100) : 16;
+      simLastTime     = now;
       const speedMult = parseInt(document.getElementById('sim-speed').value, 10);
 
       for (const v of simVehicles) v.update(dt, speedMult);
@@ -295,12 +399,15 @@
       if (++simTick % 30 === 0) {
         document.getElementById('sim-status').textContent =
           `${simVehicles.length} vehicles active`;
+        updateApiStats();
       }
 
       simFrameId = requestAnimationFrame(simLoop);
     }
 
     function startSim() {
+      apiTotalReqs = 0; apiHits = 0; apiErrors = 0; apiLatSum = 0;
+      document.getElementById('sim-api-stats').textContent = '';
       const count = parseInt(document.getElementById('sim-count').value, 10);
       spawnVehicles(count);
       simRunning  = true;
@@ -327,7 +434,6 @@
       simRunning ? stopSim() : startSim();
     });
 
-    // Live-update labels and adjust running count
     document.getElementById('sim-count').addEventListener('input', function () {
       document.getElementById('sim-count-val').textContent = this.value;
       if (simRunning) spawnVehicles(parseInt(this.value, 10));
